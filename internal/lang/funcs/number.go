@@ -34,6 +34,7 @@ var LogFunc = function.New(&function.Spec{
 		if err := gocty.FromCtyValue(args[0], &num); err != nil {
 			return cty.UnknownVal(cty.String), err
 		}
+
 		var base float64
 		if err := gocty.FromCtyValue(args[1], &base); err != nil {
 			return cty.UnknownVal(cty.String), err
@@ -66,6 +67,7 @@ var PowFunc = function.New(&function.Spec{
 		if err := gocty.FromCtyValue(args[0], &num); err != nil {
 			return cty.UnknownVal(cty.String), err
 		}
+
 		var power float64
 		if err := gocty.FromCtyValue(args[1], &power); err != nil {
 			return cty.UnknownVal(cty.String), err
@@ -147,7 +149,7 @@ var ParseIntFunc = function.New(&function.Spec{
 		if base < 2 || base > 62 {
 			return cty.UnknownVal(cty.Number), function.NewArgErrorf(
 				1,
-				"base must be between 2 and 62, inclusive",
+				"base must be a whole number between 2 and 62 inclusive",
 			)
 		}
 
@@ -161,18 +163,15 @@ var ParseIntFunc = function.New(&function.Spec{
 			)
 		}
 
-		return cty.NumberVal((&big.Float{}).SetInt(num)), nil
+		parsedNum := cty.NumberVal((&big.Float{}).SetInt(num)).WithMarks(numMarks, baseMarks)
+
+		return parsedNum, nil
 	},
 })
 
 // Log returns returns the logarithm of a given number in a given base.
 func Log(num, base cty.Value) (cty.Value, error) {
 	return LogFunc.Call([]cty.Value{num, base})
-}
-
-// ParseInt parses a string argument and returns an integer of the specified base.
-func ParseInt(num cty.Value, base cty.Value) (cty.Value, error) {
-	return ParseIntFunc.Call([]cty.Value{num, base})
 }
 
 // Pow returns the logarithm of a given number in a given base.
@@ -184,4 +183,9 @@ func Pow(num, power cty.Value) (cty.Value, error) {
 // 1 to represent the sign.
 func Signum(num cty.Value) (cty.Value, error) {
 	return SignumFunc.Call([]cty.Value{num})
+}
+
+// ParseInt parses a string argument and returns an integer of the specified base.
+func ParseInt(num cty.Value, base cty.Value) (cty.Value, error) {
+	return ParseIntFunc.Call([]cty.Value{num, base})
 }
