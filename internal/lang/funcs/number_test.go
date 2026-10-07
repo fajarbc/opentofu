@@ -27,23 +27,28 @@ func TestLog(t *testing.T) {
 			false,
 		},
 		{
+			cty.NumberFloatVal(100),
 			cty.NumberFloatVal(10),
-			cty.NumberFloatVal(10),
-			cty.NumberFloatVal(1),
-			false,
-		},
-
-		{
-			cty.NumberFloatVal(0),
-			cty.NumberFloatVal(10),
-			cty.NegativeInfinity,
+			cty.NumberFloatVal(2),
 			false,
 		},
 		{
-			cty.NumberFloatVal(10),
-			cty.NumberFloatVal(0),
-			cty.NumberFloatVal(-0),
+			cty.NumberFloatVal(16),
+			cty.NumberFloatVal(2),
+			cty.NumberFloatVal(4),
 			false,
+		},
+		{
+			cty.NumberIntVal(-1),
+			cty.NumberIntVal(10),
+			cty.NilVal,
+			true,
+		},
+		{
+			cty.NumberIntVal(10),
+			cty.NumberIntVal(1),
+			cty.NilVal,
+			true,
 		},
 	}
 
@@ -59,7 +64,6 @@ func TestLog(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("unexpected error: %s", err)
 			}
-
 			if !got.RawEquals(test.Want) {
 				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, test.Want)
 			}
@@ -81,47 +85,28 @@ func TestPow(t *testing.T) {
 			false,
 		},
 		{
-			cty.NumberFloatVal(1),
-			cty.NumberFloatVal(1),
-			cty.NumberFloatVal(1),
-			false,
-		},
-
-		{
-			cty.NumberFloatVal(2),
-			cty.NumberFloatVal(0),
-			cty.NumberFloatVal(1),
-			false,
-		},
-		{
 			cty.NumberFloatVal(2),
 			cty.NumberFloatVal(1),
 			cty.NumberFloatVal(2),
 			false,
 		},
 		{
+			cty.NumberFloatVal(2),
 			cty.NumberFloatVal(3),
-			cty.NumberFloatVal(2),
+			cty.NumberFloatVal(8),
+			false,
+		},
+		{
 			cty.NumberFloatVal(9),
+			cty.NumberFloatVal(0.5),
+			cty.NumberFloatVal(3),
 			false,
 		},
 		{
-			cty.NumberFloatVal(-3),
-			cty.NumberFloatVal(2),
-			cty.NumberFloatVal(9),
-			false,
-		},
-		{
-			cty.NumberFloatVal(2),
-			cty.NumberFloatVal(-2),
-			cty.NumberFloatVal(0.25),
-			false,
-		},
-		{
-			cty.NumberFloatVal(0),
-			cty.NumberFloatVal(2),
-			cty.NumberFloatVal(0),
-			false,
+			cty.NumberIntVal(-1),
+			cty.NumberFloatVal(0.5),
+			cty.NilVal,
+			true,
 		},
 	}
 
@@ -137,7 +122,6 @@ func TestPow(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("unexpected error: %s", err)
 			}
-
 			if !got.RawEquals(test.Want) {
 				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, test.Want)
 			}
@@ -152,18 +136,18 @@ func TestSignum(t *testing.T) {
 		Err  bool
 	}{
 		{
-			cty.NumberFloatVal(0),
-			cty.NumberFloatVal(0),
+			cty.NumberIntVal(-12),
+			cty.NumberIntVal(-1),
 			false,
 		},
 		{
-			cty.NumberFloatVal(12),
-			cty.NumberFloatVal(1),
+			cty.NumberIntVal(12),
+			cty.NumberIntVal(1),
 			false,
 		},
 		{
-			cty.NumberFloatVal(-29),
-			cty.NumberFloatVal(-1),
+			cty.NumberIntVal(0),
+			cty.NumberIntVal(0),
 			false,
 		},
 	}
@@ -180,7 +164,6 @@ func TestSignum(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("unexpected error: %s", err)
 			}
-
 			if !got.RawEquals(test.Want) {
 				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, test.Want)
 			}
@@ -380,7 +363,6 @@ func TestParseInt(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("unexpected error: %s", err)
 			}
-
 			if !got.RawEquals(test.Want) {
 				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, test.Want)
 			}
