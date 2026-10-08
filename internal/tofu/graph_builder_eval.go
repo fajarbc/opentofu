@@ -7,6 +7,7 @@ package tofu
 
 import (
 	"context"
+	"log"
 
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/configs"
@@ -17,29 +18,24 @@ import (
 
 // EvalGraphBuilder implements GraphBuilder and constructs a graph suitable
 // for evaluating in-memory values (input variables, local values, output
-// values) in the state without any other side-effects.
+// values).
 //
-// This graph is used only in weird cases, such as the "tofu console"
-// CLI command, where we need to evaluate expressions against the state
-// without taking any other actions.
+// In-memory values can be evaluated before or during a plan or apply walk,
+// but the eval graph can also be used on its own to evaluate expressions
+// in an interactive console, without changing the state.
 //
-// The generated graph will include nodes for providers, resources, etc
-// just to allow indirect dependencies to be resolved, but these nodes will
-// not take any actions themselves since we assume that their parts of the
-// state, if any, are already complete.
-//
-// Although the providers are never configured, they must still be available
+// In order to successfully evaluate in-memory values, the configuration
+// must already be loaded, and the state must have already been initialized
+// or read from persistent storage. Additionally, schemas must be available
 // in order to obtain schema information used for type checking, etc.
 type EvalGraphBuilder struct {
 	// Config is the configuration tree.
 	Config *configs.Config
 
-	// State is the current state
+	// State is the current state.
 	State *states.State
 
-	// RootVariableValues are the raw input values for root input variables
-	// given by the caller, which we'll resolve into final values as part
-	// of the plan walk.
+	// RootVariableValues provides values for root module input variables.
 	RootVariableValues InputValues
 
 	// Plugins is a library of plug-in components (providers and
@@ -101,8 +97,12 @@ func (b *EvalGraphBuilder) Steps() []GraphTransformer {
 		// After schema transformer, we can add function references
 		&ProviderFunctionTransformer{Config: b.Config, ProviderFunctionTracker: b.ProviderFunctionTracker},
 
-		// Remove unused providers and proxies
-		&PruneProviderTransformer{},
+		// For console evaluation, also track all available providers in the configuration so
+		// provider-defined functions can be called dynamically even if not statically referenced in .tf
+		&EvalProviderFunctionTransformer{Config: b.Config, ProviderFunctionTracker: b.ProviderFunctionTracker},
+
+		// Remove unused providers and proxies, but retain providers tracked for functions in console
+		&PruneEvalProviderTransformer{ProviderFunctionTracker: b.ProviderFunctionTracker},
 
 		// Create expansion nodes for all of the module calls. This must
 		// come after all other transformers that create nodes representing
@@ -127,4 +127,161 @@ func (b *EvalGraphBuilder) Steps() []GraphTransformer {
 	}
 
 	return steps
+}
+
+// EvalProviderFunctionTransformer tracks all providers in Config in the ProviderFunctionTracker
+// so that provider-defined functions can be called dynamically in console evaluation,
+// even when the configuration does not already call them statically.
+type EvalProviderFunctionTransformer struct {
+	Config                  *configs.Config
+	ProviderFunctionTracker ProviderFunctionMapping
+}
+
+func (t *EvalProviderFunctionTransformer) Transform(_ context.Context, g *Graph) error {
+	if t.Config == nil || t.ProviderFunctionTracker == nil {
+		return nil
+	}
+
+	providerVerts := providerVertexMap(g)
+
+	var trackModule func(c *configs.Config)
+	trackModule = func(c *configs.Config) {
+		if c == nil || c.Module == nil {
+			return
+		}
+
+		if c.Module.ProviderRequirements != nil {
+			for name, rp := range c.Module.ProviderRequirements.RequiredProviders {
+				t.trackProvider(g, providerVerts, c.Path, name, rp.Type, "")
+				for _, alias := range rp.Aliases {
+					t.trackProvider(g, providerVerts, c.Path, name, rp.Type, alias.Alias)
+				}
+			}
+		}
+
+		for _, pConfig := range c.Module.ProviderConfigs {
+			var providerType addrs.Provider
+			if c.Module.ProviderRequirements != nil {
+				if rp, ok := c.Module.ProviderRequirements.RequiredProviders[pConfig.Name]; ok {
+					providerType = rp.Type
+				}
+			}
+			if providerType.Type == "" {
+				providerType = addrs.ImpliedProviderForUnqualifiedType(pConfig.Name)
+			}
+			t.trackProvider(g, providerVerts, c.Path, pConfig.Name, providerType, pConfig.Alias)
+		}
+
+		for _, child := range c.Children {
+			trackModule(child)
+		}
+	}
+
+	trackModule(t.Config)
+	return nil
+}
+
+func (t *EvalProviderFunctionTransformer) trackProvider(
+	g *Graph,
+	providerVerts map[string]GraphNodeProvider,
+	modPath addrs.Module,
+	name string,
+	providerType addrs.Provider,
+	alias string,
+) {
+	key := ProviderFunctionReference{
+		ModulePath:    modPath.String(),
+		ProviderName:  name,
+		ProviderAlias: alias,
+	}
+	if _, ok := t.ProviderFunctionTracker[key]; ok {
+		return
+	}
+
+	absPc := addrs.AbsProviderConfig{
+		Provider: providerType,
+		Module:   modPath,
+		Alias:    alias,
+	}
+
+	var provider GraphNodeProvider = providerVerts[absPc.String()]
+	if provider == nil {
+		stubAddr := addrs.AbsProviderConfig{
+			Module:   addrs.RootModule,
+			Provider: providerType,
+			Alias:    alias,
+		}
+		provider = providerVerts[stubAddr.String()]
+		if provider == nil && alias != "" {
+			defaultStubAddr := addrs.AbsProviderConfig{
+				Module:   addrs.RootModule,
+				Provider: providerType,
+			}
+			provider = providerVerts[defaultStubAddr.String()]
+		}
+		if provider == nil {
+			log.Printf("[TRACE] EvalProviderFunctionTransformer: creating init-only node for %s", stubAddr)
+			stub := &NodeEvalableProvider{
+				NodeAbstractProvider: &NodeAbstractProvider{
+					Addr: stubAddr,
+				},
+			}
+			provider = stub
+			providerVerts[stubAddr.String()] = stub
+			g.Add(stub)
+		}
+	}
+
+	if p, ok := provider.(*graphNodeProxyProvider); ok {
+		provider = p.Target()
+	}
+
+	t.ProviderFunctionTracker[key] = FunctionProvidedBy{
+		Provider:  provider.ProviderAddr(),
+		Instance:  provider.Instance,
+		KeyModule: modPath,
+	}
+}
+
+// PruneEvalProviderTransformer removes unused providers and proxies, but retains
+// providers tracked in ProviderFunctionTracker so their instances are initialized for console eval.
+type PruneEvalProviderTransformer struct {
+	ProviderFunctionTracker ProviderFunctionMapping
+}
+
+func (t *PruneEvalProviderTransformer) Transform(_ context.Context, g *Graph) error {
+	for _, v := range g.Vertices() {
+		pv, ok := v.(GraphNodeProvider)
+		if !ok {
+			continue
+		}
+
+		if _, ok := v.(*graphNodeProxyProvider); ok {
+			log.Printf("[DEBUG] pruning proxy %s", dag.VertexName(v))
+			g.Remove(v)
+			continue
+		}
+
+		if t.ProviderFunctionTracker != nil && t.hasProvider(pv.ProviderAddr()) {
+			log.Printf("[DEBUG] retaining %s for console eval functions", dag.VertexName(v))
+			continue
+		}
+
+		// Remove providers with no dependencies.
+		if g.UpEdges(v).Len() == 0 {
+			log.Printf("[DEBUG] pruning unused %s", dag.VertexName(v))
+			g.Remove(v)
+		}
+	}
+	return nil
+}
+
+func (t *PruneEvalProviderTransformer) hasProvider(addr addrs.AbsProviderConfig) bool {
+	addrStr := addr.String()
+	for _, target := range t.ProviderFunctionTracker {
+		if target.Provider.String() == addrStr {
+			return true
+		}
+	}
+	return false
 }
